@@ -73,6 +73,22 @@ jobs:
           cd "$DEPLOY_DIR"
           docker-compose -f "$COMPOSE_FILE" up -d --remove-orphans
 
+      - name: Wait for Baserow health
+        run: |
+          cd "$DEPLOY_DIR"
+          CONTAINER_ID=$(docker-compose -f "$COMPOSE_FILE" ps -q baserow_all_in_one)
+          for i in $(seq 1 60); do
+            STATUS=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER_ID")
+            echo "Health status: $STATUS"
+            if [ "$STATUS" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Baserow did not become healthy in time."
+          docker logs "$CONTAINER_ID" | tail -n 200
+          exit 1
+
       - name: Show running containers
         run: |
           cd "$DEPLOY_DIR"
