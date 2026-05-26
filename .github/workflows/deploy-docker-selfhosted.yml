@@ -1,0 +1,56 @@
+name: Docker Deploy (Self-Hosted)
+
+on:
+  push:
+    branches: ["develop"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-baserow-cc
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 60
+    env:
+      DEPLOY_DIR: /home/runner/deploy/baserow-cc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify docker access
+        run: |
+          docker version
+          docker-compose version
+
+      - name: Prepare deploy directory
+        run: |
+          mkdir -p "$DEPLOY_DIR"
+          rsync -a --delete --exclude '.git' ./ "$DEPLOY_DIR"/
+
+      - name: Prepare .env
+        env:
+          BASEROW_ENV_FILE: ${{ secrets.BASEROW_ENV_FILE }}
+        run: |
+          cd "$DEPLOY_DIR"
+          if [ -n "$BASEROW_ENV_FILE" ]; then
+            printf '%s' "$BASEROW_ENV_FILE" > .env
+            echo "Using .env from secret BASEROW_ENV_FILE"
+          elif [ ! -f .env ]; then
+            cp .env.example .env
+            echo "No BASEROW_ENV_FILE secret found, copied .env.example to .env"
+          else
+            echo "Using existing .env"
+          fi
+
+      - name: Build and start containers
+        run: |
+          cd "$DEPLOY_DIR"
+          docker-compose pull || true
+          docker-compose up -d --build --remove-orphans
+
+      - name: Cleanup unused images
+        if: always()
+        run: docker image prune -f
