@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from json.decoder import JSONDecodeError
 from typing import Any, List, Optional, Union
@@ -13,6 +13,7 @@ from baserow.contrib.database.fields.constants import (
     BASEROW_BOOLEAN_FIELD_TRUE_VALUES,
 )
 from baserow.core.datetime import FormattedDate, FormattedDateTime
+from baserow.core.duration import parse_duration_string
 
 
 def ensure_boolean(value: Any, strict=True) -> bool:
@@ -99,6 +100,9 @@ def ensure_integer(value: Any, allow_empty: bool = False) -> Optional[int]:
             raise ValidationError("The value is required")
         return None
 
+    if isinstance(value, timedelta):
+        return int(value.total_seconds())
+
     try:
         return int(value)
     except (ValueError, TypeError) as exc:
@@ -125,6 +129,10 @@ def ensure_string(value: Any, allow_empty: bool = True) -> str:
     if isinstance(value, bool):
         # To match the frontend
         return "true" if value else "false"
+
+    if isinstance(value, timedelta):
+        return str(int(value.total_seconds()))
+
     if isinstance(value, list):
         results = [ensure_string(item) for item in value if item]
         return ",".join(results)
@@ -206,19 +214,62 @@ def ensure_date(value: Any) -> Optional[date]:
         raise ValidationError("Value cannot be converted to a date.") from exc
 
 
-def ensure_datetime(value: Any) -> Optional[datetime]:
+def ensure_datetime(
+    value: Any, date_format: str = "%Y-%m-%d %H:%M", strict: bool = False
+) -> Optional[datetime]:
     """
     Ensures that the value is a datetime or can be converted to a datetime.
     :param value: The value to ensure as a datetime.
+    :param date_format: The format to use to parse the datetime.
+    :param strict: If True, always validates the date format.
     :return: The value as a datetime.
     :raises ValidationError: If the value is not a valid datetime or convertible to a
         datetime.
     """
 
+    if value is None:
+        return None
+
     try:
-        return FormattedDateTime(value).datetime if value is not None else None
+        if strict and isinstance(value, str):
+            parsed = datetime.strptime(value, date_format)
+            return FormattedDateTime(parsed, date_format=date_format).datetime
+        return FormattedDateTime(value, date_format=date_format).datetime
     except (ValueError, TypeError) as exc:
         raise ValidationError("Value cannot be converted to a datetime.") from exc
+
+
+def ensure_duration(value: Any) -> timedelta:
+    """
+    Ensures that the value is a timedelta or is convertible to a timedelta.
+    :param value: The value to ensure as a timedelta.
+    :return: The value as a timedelta.
+    :raises ValidationError: If the value is not a valid timedelta or
+        convertible to a timedelta.
+    """
+
+    if isinstance(value, timedelta):
+        return value
+
+    if isinstance(value, str):
+        result = parse_duration_string(value)
+        if result is not None:
+            return result
+
+        try:
+            return timedelta(seconds=ensure_integer(value))
+        except ValidationError:
+            pass
+
+        raise ValidationError(
+            f"'{value}' is not a valid duration. "
+            f"Expected format: e.g. '1 day', '2 hours'."
+        )
+
+    if isinstance(value, (int, float)):
+        return timedelta(seconds=value)
+
+    raise ValidationError("Value cannot be converted to a duration.")
 
 
 def ensure_object(value: Any) -> Optional[dict]:
