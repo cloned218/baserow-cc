@@ -1,0 +1,126 @@
+name: Simple CI
+
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          target: ci
+          load: true
+          tags: baserow_backend:ci
+
+      - name: Run backend lint
+        run: docker run --rm baserow_backend:ci lint
+
+  frontend-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: web-frontend/Dockerfile
+          target: ci
+          load: true
+          tags: baserow_frontend:ci
+
+      - name: Run frontend lint
+        run: docker run --rm baserow_frontend:ci lint
+
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: web-frontend/Dockerfile
+          target: ci
+          load: true
+          tags: baserow_frontend:ci
+
+      - name: Run frontend tests
+        run: docker run --rm baserow_frontend:ci test
+
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          target: ci
+          load: true
+          tags: baserow_backend:ci
+
+      - name: Create Docker network
+        run: docker network create baserow-ci
+
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name ci-test-db --network baserow-ci \
+            -e POSTGRES_USER=baserow \
+            -e POSTGRES_PASSWORD=baserow \
+            -e POSTGRES_DB=baserow \
+            postgres:16
+
+      - name: Start Redis
+        run: |
+          docker run -d --name ci-test-redis --network baserow-ci \
+            redis:7 redis-server --requirepass baserow
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in {1..30}; do
+            docker exec ci-test-db pg_isready -U baserow && exit 0
+            sleep 2
+          done
+          exit 1
+
+      - name: Wait for Redis
+        run: |
+          for i in {1..30}; do
+            docker exec ci-test-redis redis-cli -a baserow ping | grep PONG && exit 0
+            sleep 2
+          done
+          exit 1
+
+      - name: Run backend tests
+        run: |
+          docker run --rm --network baserow-ci \
+            -e DATABASE_HOST=ci-test-db \
+            -e DATABASE_USER=baserow \
+            -e DATABASE_PASSWORD=baserow \
+            -e DATABASE_NAME=baserow \
+            -e REDIS_HOST=ci-test-redis \
+            -e REDIS_PASSWORD=baserow \
+            baserow_backend:ci test
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f ci-test-db ci-test-redis || true
+          docker network rm baserow-ci || true
